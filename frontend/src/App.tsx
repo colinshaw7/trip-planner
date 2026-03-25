@@ -28,6 +28,8 @@ function App() {
   const [endCoord, setEndCoord] = useState<GeocodedPoint | null>(null);
   const [routeGeoJson, setRouteGeoJson] = useState<GeoJSON.FeatureCollection | null>(null);
   const [loading, setLoading] = useState(false);
+  const [directionsOpen, setDirectionsOpen] = useState(false);
+  const [steps, setSteps] = useState<{ instruction: string; distance: number; duration: number }[]>([]);
   const mapRef = useRef<MapRef>(null);
 
   const handleSubmit = async () => {
@@ -77,6 +79,11 @@ function App() {
       const routeData = await dirRes.json();
       setRouteGeoJson(routeData);
 
+      const segments = routeData.features?.[0]?.properties?.segments;
+      if (segments?.[0]?.steps) {
+        setSteps(segments[0].steps);
+      }
+
       const bbox = routeData.bbox;
       if (bbox) {
         mapRef.current?.fitBounds(
@@ -91,6 +98,7 @@ function App() {
       setStartCoord(null);
       setEndCoord(null);
       setRouteGeoJson(null);
+      setSteps([]);
     } finally {
       setLoading(false);
     }
@@ -189,6 +197,80 @@ function App() {
               {status}
             </p>
           )}
+        </div>
+      </div>
+      {/* Directions panel + tab wrapper */}
+      <div className={`absolute top-1/2 -translate-y-1/2 flex items-center transition-all duration-300 ${
+        directionsOpen ? 'right-0' : 'right-[calc(-22vw-1px)]'
+      }`}>
+        {/* Tab */}
+        <button
+          onClick={() => setDirectionsOpen(!directionsOpen)}
+          className="bg-panel backdrop-blur-xl border border-panel-border border-r-0 rounded-l-lg px-1.5 py-3 text-white/60 hover:text-white transition-colors shrink-0"
+        >
+          <svg className={`w-4 h-4 transition-transform duration-300 ${directionsOpen ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
+          </svg>
+        </button>
+
+        {/* Panel */}
+        <div className="w-[22vw] min-w-72 h-[70vh] rounded-l-2xl bg-panel backdrop-blur-xl border border-panel-border border-r-0 shadow-2xl flex flex-col overflow-hidden">
+          {/* Header */}
+          <div className="px-5 pt-5 pb-3 border-b border-panel-border">
+            <h2 className="font-display text-2xl text-white tracking-wide">
+              Directions
+            </h2>
+            <p className="text-xs text-white/40 mt-1 font-body">
+              {steps.length > 0
+                ? `${steps.length} steps`
+                : 'Plan a route to see directions'}
+            </p>
+          </div>
+
+          {/* Steps list */}
+          <div className="flex-1 overflow-y-auto px-5 py-4">
+            {steps.length === 0 ? (
+              <div className="flex flex-col items-center justify-center h-full text-center px-4">
+                <div className="w-10 h-10 rounded-full border-2 border-white/10 flex items-center justify-center mb-4">
+                  <svg className="w-5 h-5 text-white/20" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M9 6.75V15m6-6v8.25m.503 3.498l4.875-2.437c.381-.19.622-.58.622-1.006V4.82c0-.836-.88-1.38-1.628-1.006l-3.869 1.934c-.317.159-.69.159-1.006 0L9.503 3.252a1.125 1.125 0 00-1.006 0L3.622 5.689C3.24 5.88 3 6.27 3 6.695V19.18c0 .836.88 1.38 1.628 1.006l3.869-1.934c.317-.159.69-.159 1.006 0l4.994 2.497c.317.158.69.158 1.006 0z" />
+                  </svg>
+                </div>
+                <p className="text-sm text-white/30">
+                  No route yet
+                </p>
+                <p className="text-xs text-white/15 mt-1">
+                  Plan a route to see turn-by-turn directions
+                </p>
+              </div>
+            ) : (
+              <ol className="flex flex-col gap-1">
+                {steps.map((step, i) => (
+                  <li key={i} className="flex gap-3 items-start py-2.5 border-b border-white/5 last:border-0">
+                    <span className="text-[10px] font-semibold text-cardinal bg-cardinal/10 rounded-full w-6 h-6 flex items-center justify-center shrink-0 mt-0.5">
+                      {i + 1}
+                    </span>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm text-white/80 leading-snug">{step.instruction}</p>
+                      <div className="flex gap-2 mt-1">
+                        <span className="text-[10px] text-white/25 tracking-wide uppercase">
+                          {step.distance >= 1000
+                            ? `${(step.distance / 1000).toFixed(1)} km`
+                            : `${Math.round(step.distance)} m`}
+                        </span>
+                        <span className="text-[10px] text-white/15">|</span>
+                        <span className="text-[10px] text-white/25 tracking-wide uppercase">
+                          {step.duration >= 60
+                            ? `${Math.round(step.duration / 60)} min`
+                            : `${Math.round(step.duration)} sec`}
+                        </span>
+                      </div>
+                    </div>
+                  </li>
+                ))}
+              </ol>
+            )}
+          </div>
         </div>
       </div>
     </div>

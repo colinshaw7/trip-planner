@@ -4,6 +4,7 @@ import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
 load_dotenv()
 
@@ -44,3 +45,28 @@ async def geocode(address: str = Query(..., min_length=1)):
     coords = features[0]["geometry"]["coordinates"]  # [lng, lat]
     label = features[0]["properties"]["label"]
     return {"lng": coords[0], "lat": coords[1], "label": label}
+
+
+class DirectionsRequest(BaseModel):
+    coordinates: list[list[float]]
+
+
+@app.post("/directions")
+async def directions(req: DirectionsRequest):
+    if not ORS_API_KEY:
+        raise HTTPException(status_code=500, detail="ORS API key not configured")
+
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(
+            "https://api.openrouteservice.org/v2/directions/driving-car/geojson",
+            json={
+                "coordinates": req.coordinates,
+                "radiuses": [-1] * len(req.coordinates),
+            },
+            headers={"Authorization": ORS_API_KEY},
+        )
+
+    if resp.status_code != 200:
+        raise HTTPException(status_code=resp.status_code, detail=resp.text)
+
+    return resp.json()
