@@ -1,5 +1,6 @@
 import { useState, useRef } from 'react';
-import Map, { Marker } from 'react-map-gl/mapbox';
+import Map, { Marker, Source, Layer } from 'react-map-gl/mapbox';
+import type { LayerProps } from 'react-map-gl/mapbox';
 import type { MapRef } from 'react-map-gl/mapbox';
 import 'mapbox-gl/dist/mapbox-gl.css';
 
@@ -7,12 +8,25 @@ const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN || '';
 
 type GeocodedPoint = { lng: number; lat: number; label: string };
 
+const routeCasing: LayerProps = {
+  id: 'route-casing',
+  type: 'line',
+  paint: { 'line-color': '#c5050c', 'line-width': 6, 'line-opacity': 0.8 },
+};
+
+const routeFill: LayerProps = {
+  id: 'route-fill',
+  type: 'line',
+  paint: { 'line-color': '#ffffff', 'line-width': 3, 'line-opacity': 0.95 },
+};
+
 function App() {
   const [start, setStart] = useState('');
   const [end, setEnd] = useState('');
   const [status, setStatus] = useState('');
   const [startCoord, setStartCoord] = useState<GeocodedPoint | null>(null);
   const [endCoord, setEndCoord] = useState<GeocodedPoint | null>(null);
+  const [routeGeoJson, setRouteGeoJson] = useState<GeoJSON.FeatureCollection | null>(null);
   const [loading, setLoading] = useState(false);
   const mapRef = useRef<MapRef>(null);
 
@@ -44,16 +58,39 @@ function App() {
       setStartCoord(startData);
       setEndCoord(endData);
 
-      mapRef.current?.fitBounds(
-        [[startData.lng, startData.lat], [endData.lng, endData.lat]],
-        { padding: 80, duration: 1000 }
-      );
+      const dirRes = await fetch('http://localhost:8000/directions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          coordinates: [
+            [startData.lng, startData.lat],
+            [endData.lng, endData.lat],
+          ],
+        }),
+      });
+
+      if (!dirRes.ok) {
+        const err = await dirRes.json();
+        throw new Error(err.detail || 'Could not fetch route');
+      }
+
+      const routeData = await dirRes.json();
+      setRouteGeoJson(routeData);
+
+      const bbox = routeData.bbox;
+      if (bbox) {
+        mapRef.current?.fitBounds(
+          [[bbox[0], bbox[1]], [bbox[2], bbox[3]]],
+          { padding: 80, duration: 1000 }
+        );
+      }
 
       setStatus('');
     } catch (e) {
       setStatus(e instanceof Error ? e.message : 'Geocoding failed');
       setStartCoord(null);
       setEndCoord(null);
+      setRouteGeoJson(null);
     } finally {
       setLoading(false);
     }
@@ -72,6 +109,12 @@ function App() {
         mapStyle="mapbox://styles/mapbox/streets-v12"
         mapboxAccessToken={MAPBOX_TOKEN}
       >
+        {routeGeoJson && (
+          <Source id="route" type="geojson" data={routeGeoJson}>
+            <Layer {...routeCasing} />
+            <Layer {...routeFill} />
+          </Source>
+        )}
         {startCoord && (
           <Marker longitude={startCoord.lng} latitude={startCoord.lat}>
             <div className="w-4 h-4 rounded-full bg-cardinal shadow-[0_0_10px_rgba(197,5,12,0.6)] border-2 border-white" />
