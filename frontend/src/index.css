@@ -1,1 +1,20 @@
 @import "tailwindcss";
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+@theme {
+  --color-cardinal: #c5050c;
+  --color-cardinal-dark: #9b0000;
+  --color-panel: rgba(15, 15, 20, 0.82);
+  --color-panel-border: rgba(255, 255, 255, 0.08);
+  --color-input-bg: rgba(255, 255, 255, 0.06);
+  --color-input-border: rgba(255, 255, 255, 0.12);
+  --color-input-focus: rgba(197, 5, 12, 0.5);
+  --font-display: "DM Serif Display", serif;
+  --font-body: "DM Sans", sans-serif;
+}
+
