@@ -7,6 +7,7 @@ Trip planning application so I can avoid paying for AAA
 - **React** w/ **TypeScript** — UI framework
 - **Mapbox GL JS** (`react-map-gl`) — interactive map
 - **Zustand** — lightweight state management for trip/route/detour state
+- **Tailwind CSS** — utility-first CSS framework
 
 ### Backend
 - **FastAPI** (Python) — async REST API, auto-generated OpenAPI docs
