@@ -5,8 +5,18 @@ import type { MapRef } from 'react-map-gl/mapbox';
 import 'mapbox-gl/dist/mapbox-gl.css';
 
 const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN || '';
+const API_BASE = 'http://localhost:8000';
 
 type GeocodedPoint = { lng: number; lat: number; label: string };
+
+async function geocodeAddress(address: string, label: string): Promise<GeocodedPoint> {
+  const res = await fetch(`${API_BASE}/geocode?address=${encodeURIComponent(address)}`);
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.detail || `Could not geocode ${label}`);
+  }
+  return res.json();
+}
 
 const routeCasing: LayerProps = {
   id: 'route-casing',
@@ -23,9 +33,11 @@ const routeFill: LayerProps = {
 function App() {
   const [start, setStart] = useState('');
   const [end, setEnd] = useState('');
+  const [stops, setStops] = useState<string[]>([]);
   const [status, setStatus] = useState('');
   const [startCoord, setStartCoord] = useState<GeocodedPoint | null>(null);
   const [endCoord, setEndCoord] = useState<GeocodedPoint | null>(null);
+  const [stopCoords, setStopCoords] = useState<GeocodedPoint[]>([]);
   const [routeGeoJson, setRouteGeoJson] = useState<GeoJSON.FeatureCollection | null>(null);
   const [loading, setLoading] = useState(false);
   const [directionsOpen, setDirectionsOpen] = useState(false);
@@ -40,35 +52,27 @@ function App() {
     setLoading(true);
     setStatus('');
     try {
-      const [startRes, endRes] = await Promise.all([
-        fetch(`http://localhost:8000/geocode?address=${encodeURIComponent(start)}`),
-        fetch(`http://localhost:8000/geocode?address=${encodeURIComponent(end)}`),
+      const filledStops = stops.filter((s) => s.trim());
+      const [startData, endData, ...stopResults] = await Promise.all([
+        geocodeAddress(start, 'starting point'),
+        geocodeAddress(end, 'destination'),
+        ...filledStops.map((s, i) => geocodeAddress(s, `stop ${i + 1}`)),
       ]);
-
-      if (!startRes.ok) {
-        const err = await startRes.json();
-        throw new Error(err.detail || 'Could not geocode starting point');
-      }
-      if (!endRes.ok) {
-        const err = await endRes.json();
-        throw new Error(err.detail || 'Could not geocode destination');
-      }
-
-      const startData: GeocodedPoint = await startRes.json();
-      const endData: GeocodedPoint = await endRes.json();
 
       setStartCoord(startData);
       setEndCoord(endData);
+      setStopCoords(stopResults);
 
-      const dirRes = await fetch('http://localhost:8000/directions', {
+      const allCoords = [
+        [startData.lng, startData.lat],
+        ...stopResults.map((s) => [s.lng, s.lat]),
+        [endData.lng, endData.lat],
+      ];
+
+      const dirRes = await fetch(`${API_BASE}/directions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          coordinates: [
-            [startData.lng, startData.lat],
-            [endData.lng, endData.lat],
-          ],
-        }),
+        body: JSON.stringify({ coordinates: allCoords }),
       });
 
       if (!dirRes.ok) {
@@ -97,6 +101,7 @@ function App() {
       setStatus(e instanceof Error ? e.message : 'Geocoding failed');
       setStartCoord(null);
       setEndCoord(null);
+      setStopCoords([]);
       setRouteGeoJson(null);
       setSteps([]);
     } finally {
@@ -128,6 +133,11 @@ function App() {
             <div className="w-4 h-4 rounded-full bg-cardinal shadow-[0_0_10px_rgba(197,5,12,0.6)] border-2 border-white" />
           </Marker>
         )}
+        {stopCoords.map((coord, i) => (
+          <Marker key={`stop-marker-${i}`} longitude={coord.lng} latitude={coord.lat}>
+            <div className="w-3.5 h-3.5 rounded-full bg-white/80 shadow-[0_0_8px_rgba(255,255,255,0.3)] border-2 border-cardinal" />
+          </Marker>
+        ))}
         {endCoord && (
           <Marker longitude={endCoord.lng} latitude={endCoord.lat}>
             <div className="w-4 h-4 rounded-full bg-cardinal shadow-[0_0_10px_rgba(197,5,12,0.6)] border-2 border-white" />
@@ -149,33 +159,89 @@ function App() {
 
         {/* Form */}
         <div className="flex-1 overflow-y-auto px-5 py-4">
-          <div className="flex gap-3 items-start">
-            {/* Route dots */}
-            <div className="flex flex-col items-center pt-3 gap-0.5">
-              <div className="w-2.5 h-2.5 rounded-full bg-cardinal shadow-[0_0_8px_rgba(197,5,12,0.5)]" />
-              <div className="w-px h-3 bg-white/15" />
-              <div className="w-1 h-1 rounded-full bg-white/20" />
-              <div className="w-px h-3 bg-white/15" />
-              <div className="w-1 h-1 rounded-full bg-white/20" />
-              <div className="w-px h-3 bg-white/15" />
-              <div className="w-2.5 h-2.5 rounded-full border-2 border-white/60 bg-transparent" />
-            </div>
-
-            {/* Inputs */}
-            <div className="flex flex-col gap-3 flex-1">
+          <div className="flex flex-col gap-0">
+            {/* Start row */}
+            <div className="flex items-center gap-3">
+              <div className="flex flex-col items-center w-4 shrink-0">
+                <div className="w-2.5 h-2.5 rounded-full bg-cardinal shadow-[0_0_8px_rgba(197,5,12,0.5)]" />
+              </div>
               <input
                 type="text"
                 placeholder="Starting point"
                 value={start}
                 onChange={(e) => setStart(e.target.value)}
-                className="w-full bg-input-bg border border-input-border rounded-lg px-3 py-2.5 text-sm text-white placeholder-white/30 focus:outline-none focus:border-cardinal focus:shadow-[0_0_0_3px_var(--color-input-focus)] transition-all duration-200"
+                className="flex-1 bg-input-bg border border-input-border rounded-lg px-3 py-2.5 text-sm text-white placeholder-white/30 focus:outline-none focus:border-cardinal focus:shadow-[0_0_0_3px_var(--color-input-focus)] transition-all duration-200"
               />
+            </div>
+
+            {/* Stops */}
+            {stops.map((stop, i) => (
+              <div key={`stop-${i}`}>
+                {/* Connector */}
+                <div className="flex items-center gap-3">
+                  <div className="flex flex-col items-center w-4 shrink-0 py-0.5">
+                    <div className="w-px h-2 bg-white/15" />
+                    <div className="w-1 h-1 rounded-full bg-white/20" />
+                    <div className="w-px h-2 bg-white/15" />
+                  </div>
+                </div>
+                {/* Stop input row */}
+                <div className="flex items-center gap-3">
+                  <div className="flex flex-col items-center w-4 shrink-0">
+                    <div className="w-2 h-2 rounded-full bg-white/40" />
+                  </div>
+                  <input
+                    type="text"
+                    placeholder={`Stop ${i + 1}`}
+                    value={stop}
+                    onChange={(e) => {
+                      const updated = [...stops];
+                      updated[i] = e.target.value;
+                      setStops(updated);
+                    }}
+                    className="flex-1 bg-input-bg border border-input-border rounded-lg px-3 py-2.5 text-sm text-white placeholder-white/30 focus:outline-none focus:border-cardinal focus:shadow-[0_0_0_3px_var(--color-input-focus)] transition-all duration-200"
+                  />
+                  <button
+                    onClick={() => setStops(stops.filter((_, j) => j !== i))}
+                    className="text-white/30 hover:text-red-400 transition-colors shrink-0"
+                  >
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
+                </div>
+              </div>
+            ))}
+
+            {/* Connector to add stop / destination */}
+            <div className="flex items-center gap-3">
+              <div className="flex flex-col items-center w-4 shrink-0 py-0.5">
+                <div className="w-px h-2 bg-white/15" />
+                <div className="w-1 h-1 rounded-full bg-white/20" />
+                <div className="w-px h-2 bg-white/15" />
+              </div>
+              <button
+                onClick={() => setStops([...stops, ''])}
+                className="flex items-center gap-1.5 text-xs text-white/40 hover:text-white/70 transition-colors py-1"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+                </svg>
+                Add stop
+              </button>
+            </div>
+
+            {/* End row */}
+            <div className="flex items-center gap-3">
+              <div className="flex flex-col items-center w-4 shrink-0">
+                <div className="w-2.5 h-2.5 rounded-full border-2 border-white/60 bg-transparent" />
+              </div>
               <input
                 type="text"
                 placeholder="Destination"
                 value={end}
                 onChange={(e) => setEnd(e.target.value)}
-                className="w-full bg-input-bg border border-input-border rounded-lg px-3 py-2.5 text-sm text-white placeholder-white/30 focus:outline-none focus:border-cardinal focus:shadow-[0_0_0_3px_var(--color-input-focus)] transition-all duration-200"
+                className="flex-1 bg-input-bg border border-input-border rounded-lg px-3 py-2.5 text-sm text-white placeholder-white/30 focus:outline-none focus:border-cardinal focus:shadow-[0_0_0_3px_var(--color-input-focus)] transition-all duration-200"
               />
             </div>
           </div>
