@@ -3,11 +3,11 @@ import Map, { Marker, Source, Layer } from 'react-map-gl/mapbox';
 import type { LayerProps } from 'react-map-gl/mapbox';
 import type { MapRef } from 'react-map-gl/mapbox';
 import 'mapbox-gl/dist/mapbox-gl.css';
+import { useTripStore } from './store';
+import type { GeocodedPoint } from './store';
 
 const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN || '';
 const API_BASE = 'http://localhost:8000';
-
-type GeocodedPoint = { lng: number; lat: number; label: string };
 
 async function geocodeAddress(address: string, label: string): Promise<GeocodedPoint> {
   const res = await fetch(`${API_BASE}/geocode?address=${encodeURIComponent(address)}`);
@@ -31,20 +31,22 @@ const routeFill: LayerProps = {
 };
 
 function App() {
-  const [start, setStart] = useState('');
-  const [end, setEnd] = useState('');
-  const [stops, setStops] = useState<string[]>([]);
+  const {
+    start, setStart,
+    end, setEnd,
+    stops, setStops,
+    startCoord, endCoord, stopCoords,
+    routeGeoJson, steps,
+    loading, setLoading,
+    setRouteCoords, setRouteResult,
+    clearRoute,
+  } = useTripStore();
   const [status, setStatus] = useState('');
-  const [startCoord, setStartCoord] = useState<GeocodedPoint | null>(null);
-  const [endCoord, setEndCoord] = useState<GeocodedPoint | null>(null);
-  const [stopCoords, setStopCoords] = useState<GeocodedPoint[]>([]);
-  const [routeGeoJson, setRouteGeoJson] = useState<GeoJSON.FeatureCollection | null>(null);
-  const [loading, setLoading] = useState(false);
   const [directionsOpen, setDirectionsOpen] = useState(false);
-  const [steps, setSteps] = useState<{ instruction: string; distance: number; duration: number }[]>([]);
   const mapRef = useRef<MapRef>(null);
 
   const handleSubmit = async () => {
+    if (loading) return;
     if (!start.trim() || !end.trim()) {
       setStatus('Please enter both a starting point and destination.');
       return;
@@ -59,9 +61,7 @@ function App() {
         ...filledStops.map((s, i) => geocodeAddress(s, `stop ${i + 1}`)),
       ]);
 
-      setStartCoord(startData);
-      setEndCoord(endData);
-      setStopCoords(stopResults);
+      setRouteCoords(startData, endData, stopResults);
 
       const allCoords = [
         [startData.lng, startData.lat],
@@ -81,12 +81,8 @@ function App() {
       }
 
       const routeData = await dirRes.json();
-      setRouteGeoJson(routeData);
-
       const segments = routeData.features?.[0]?.properties?.segments;
-      if (segments?.[0]?.steps) {
-        setSteps(segments[0].steps);
-      }
+      setRouteResult(routeData, segments?.[0]?.steps ?? []);
 
       const bbox = routeData.bbox;
       if (bbox) {
@@ -99,11 +95,7 @@ function App() {
       setStatus('');
     } catch (e) {
       setStatus(e instanceof Error ? e.message : 'Geocoding failed');
-      setStartCoord(null);
-      setEndCoord(null);
-      setStopCoords([]);
-      setRouteGeoJson(null);
-      setSteps([]);
+      clearRoute();
     } finally {
       setLoading(false);
     }
@@ -147,7 +139,6 @@ function App() {
 
       <div className="absolute bottom-0 left-0 w-full h-[44vh] rounded-t-2xl md:bottom-auto md:left-5 md:top-1/2 md:-translate-y-1/2 md:w-[22vw] md:min-w-72 md:h-[70vh] md:rounded-2xl bg-panel backdrop-blur-xl border border-panel-border shadow-2xl flex flex-col overflow-hidden">
 
-        {/* Header */}
         <div className="px-5 pt-5 pb-3 border-b border-panel-border">
           <h2 className="font-display text-2xl text-white tracking-wide">
             MadTrips
@@ -157,10 +148,8 @@ function App() {
           </p>
         </div>
 
-        {/* Form */}
         <div className="flex-1 overflow-y-auto px-5 py-4">
           <div className="flex flex-col gap-0">
-            {/* Start row */}
             <div className="flex items-center gap-3">
               <div className="flex flex-col items-center w-4 shrink-0">
                 <div className="w-2.5 h-2.5 rounded-full bg-cardinal shadow-[0_0_8px_rgba(197,5,12,0.5)]" />
@@ -177,7 +166,6 @@ function App() {
             {/* Stops */}
             {stops.map((stop, i) => (
               <div key={`stop-${i}`}>
-                {/* Connector */}
                 <div className="flex items-center gap-3">
                   <div className="flex flex-col items-center w-4 shrink-0 py-0.5">
                     <div className="w-px h-2 bg-white/15" />
@@ -185,7 +173,6 @@ function App() {
                     <div className="w-px h-2 bg-white/15" />
                   </div>
                 </div>
-                {/* Stop input row */}
                 <div className="flex items-center gap-3">
                   <div className="flex flex-col items-center w-4 shrink-0">
                     <div className="w-2 h-2 rounded-full bg-white/40" />
@@ -213,7 +200,6 @@ function App() {
               </div>
             ))}
 
-            {/* Connector to add stop / destination */}
             <div className="flex items-center gap-3">
               <div className="flex flex-col items-center w-4 shrink-0 py-0.5">
                 <div className="w-px h-2 bg-white/15" />
@@ -231,7 +217,6 @@ function App() {
               </button>
             </div>
 
-            {/* End row */}
             <div className="flex items-center gap-3">
               <div className="flex flex-col items-center w-4 shrink-0">
                 <div className="w-2.5 h-2.5 rounded-full border-2 border-white/60 bg-transparent" />
@@ -247,7 +232,6 @@ function App() {
           </div>
         </div>
 
-        {/* Footer */}
         <div className="px-5 pb-5 pt-2">
           <button
             onClick={handleSubmit}
@@ -265,7 +249,6 @@ function App() {
           )}
         </div>
       </div>
-      {/* Directions panel + tab wrapper */}
       <div className={`absolute top-1/2 -translate-y-1/2 flex items-center transition-all duration-300 ${
         directionsOpen ? 'right-0' : 'right-[calc(-22vw-1px)]'
       }`}>
@@ -281,7 +264,6 @@ function App() {
 
         {/* Panel */}
         <div className="w-[22vw] min-w-72 h-[70vh] rounded-l-2xl bg-panel backdrop-blur-xl border border-panel-border border-r-0 shadow-2xl flex flex-col overflow-hidden">
-          {/* Header */}
           <div className="px-5 pt-5 pb-3 border-b border-panel-border">
             <h2 className="font-display text-2xl text-white tracking-wide">
               Directions
@@ -293,7 +275,6 @@ function App() {
             </p>
           </div>
 
-          {/* Steps list */}
           <div className="flex-1 overflow-y-auto px-5 py-4">
             {steps.length === 0 ? (
               <div className="flex flex-col items-center justify-center h-full text-center px-4">
