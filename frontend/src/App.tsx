@@ -28,6 +28,28 @@ function formatDist(meters: number, metric: boolean): string {
   return miles >= 0.1 ? `${miles.toFixed(1)} mi` : `${Math.round(meters * 3.281)} ft`;
 }
 
+function haversineM(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const R = 6_371_000;
+  const p1 = lat1 * Math.PI / 180, p2 = lat2 * Math.PI / 180;
+  const dp = (lat2 - lat1) * Math.PI / 180, dl = (lng2 - lng1) * Math.PI / 180;
+  const a = Math.sin(dp / 2) ** 2 + Math.cos(p1) * Math.cos(p2) * Math.sin(dl / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
+
+// coords is GeoJSON [lng, lat][] — returns distance to nearest point on polyline and which segment
+function nearestOnRoute(lat: number, lng: number, coords: number[][]): { dist: number; segIdx: number } {
+  let minDist = Infinity, minSeg = 0;
+  for (let i = 0; i < coords.length - 1; i++) {
+    const [ax, ay] = coords[i], [bx, by] = coords[i + 1];
+    const dx = bx - ax, dy = by - ay;
+    const lenSq = dx * dx + dy * dy;
+    const t = lenSq === 0 ? 0 : Math.max(0, Math.min(1, ((lng - ax) * dx + (lat - ay) * dy) / lenSq));
+    const d = haversineM(lat, lng, ay + t * dy, ax + t * dx);
+    if (d < minDist) { minDist = d; minSeg = i; }
+  }
+  return { dist: minDist, segIdx: minSeg };
+}
+
 const routeCasing: LayerProps = {
   id: 'route-casing',
   type: 'line',
@@ -70,7 +92,7 @@ function App() {
     setStatus('');
     setDetours([]);
     setSelectedDetour(null);
-    let bbox: number[] | null = null;
+    let routeLineCoords: number[][] | null = null;
     try {
       const filledStops = stops.filter((s) => s.trim());
       const [startData, endData, ...stopResults] = await Promise.all([
@@ -102,7 +124,8 @@ function App() {
       const segments = routeData.features?.[0]?.properties?.segments;
       setRouteResult(routeData, segments?.[0]?.steps ?? []);
 
-      bbox = routeData.bbox ?? null;
+      routeLineCoords = routeData.features?.[0]?.geometry?.coordinates ?? null;
+      const bbox = routeData.bbox;
       if (bbox) {
         mapRef.current?.fitBounds(
           [[bbox[0], bbox[1]], [bbox[2], bbox[3]]],
@@ -118,15 +141,41 @@ function App() {
       setLoading(false);
     }
 
-    if (bbox) {
+    if (routeLineCoords) {
       setDetoursLoading(true);
+      const toleranceM = Math.round(detourTolerance * (useMetric ? 1000 : 1609.34));
       try {
         const res = await fetch(`${API_BASE}/detours`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ bbox, tolerance_meters: Math.round(detourTolerance * (useMetric ? 1000 : 1609.34)) }),
+          body: JSON.stringify({ route_coords: routeLineCoords, tolerance_meters: toleranceM }),
         });
-        if (res.ok) setDetours(await res.json());
+        if (!res.ok) {
+          setDetoursLoading(false);
+          return;
+        }
+
+        const raw: DetourSuggestion[] = await res.json();
+
+        const withDist = raw
+          .map((d) => {
+            const { dist, segIdx } = nearestOnRoute(d.lat, d.lng, routeLineCoords);
+            return { ...d, distance_m: dist, segIdx };
+          })
+          .filter((d) => d.distance_m <= toleranceM);
+
+        // Space evenly: bucket by segment index, pick closest per bucket, cap at 25
+        const BUCKETS = 25;
+        const totalSegs = routeLineCoords.length - 1;
+        const bucketSize = Math.max(1, Math.floor(totalSegs / BUCKETS));
+        type Candidate = (typeof withDist)[0];
+        const buckets: Record<number, Candidate> = {};
+        for (const d of withDist) {
+          const bucket = Math.floor(d.segIdx / bucketSize);
+          if (!buckets[bucket] || d.distance_m < buckets[bucket].distance_m) buckets[bucket] = d;
+        }
+
+        setDetours(Object.values(buckets).sort((a, b) => a.segIdx - b.segIdx).map(({ segIdx: _seg, ...d }) => d));
       } catch {
         // detours are non-critical
       } finally {

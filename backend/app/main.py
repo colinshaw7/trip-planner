@@ -1,3 +1,4 @@
+import asyncio
 import math
 import os
 
@@ -87,8 +88,27 @@ async def directions(req: DirectionsRequest):
 
 
 class DetoursRequest(BaseModel):
-    bbox: list[float]  # [min_lng, min_lat, max_lng, max_lat]
+    route_coords: list[list[float]]  # sampled [lng, lat] points along route
     tolerance_meters: int
+
+async def _fsq_search(client: httpx.AsyncClient, lat: float, lng: float, radius: int) -> list:
+    resp = await client.get(
+        "https://places-api.foursquare.com/places/search",
+        params={
+            "ll": f"{lat},{lng}",
+            "radius": radius,
+            "categories": "13000,16000,10000,12000",
+            "limit": 50,
+            "sort": "DISTANCE",
+        },
+        headers={
+            "Authorization": f"Bearer {FOURSQUARE_API_KEY}",
+            "X-Places-Api-Version": "2025-02-05",
+        },
+    )
+    if resp.status_code != 200:
+        return []
+    return resp.json().get("results", [])
 
 
 @app.post("/detours")
@@ -96,34 +116,31 @@ async def get_detours(req: DetoursRequest):
     if not FOURSQUARE_API_KEY:
         raise HTTPException(status_code=500, detail="Foursquare API key not configured")
 
-    min_lng, min_lat, max_lng, max_lat = req.bbox
-    center_lat = (min_lat + max_lat) / 2
-    center_lng = (min_lng + max_lng) / 2
+    coords = req.route_coords
+    N_SAMPLES = 5
+    step = max(1, (len(coords) - 1) // (N_SAMPLES - 1))
+    sample_idxs = list(range(0, len(coords), step))[:N_SAMPLES]
+    samples = [coords[i] for i in sample_idxs]
 
-    bbox_radius = _haversine_m(center_lat, center_lng, max_lat, max_lng)
-    search_radius = int(min(bbox_radius + req.tolerance_meters, 100_000))
+    search_radius = min(req.tolerance_meters, 100_000)
 
     async with httpx.AsyncClient() as client:
-        resp = await client.get(
-            "https://places-api.foursquare.com/places/search",
-            params={
-                "ll": f"{center_lat},{center_lng}",
-                "radius": search_radius,
-                "categories": "13000,16000,10000,12000",
-                "limit": 15,
-                "sort": "RELEVANCE",
-            },
-            headers={
-                "Authorization": f"Bearer {FOURSQUARE_API_KEY}",
-                "X-Places-Api-Version": "2025-02-05",
-            },
-        )
+        responses = await asyncio.gather(*[
+            _fsq_search(client, lng_lat[1], lng_lat[0], search_radius)
+            for lng_lat in samples
+        ])
 
-    if resp.status_code != 200:
-        raise HTTPException(status_code=resp.status_code, detail=resp.text)
+    seen: set[str] = set()
+    raw_places = []
+    for batch in responses:
+        for place in batch:
+            fid = place.get("fsq_place_id")
+            if fid and fid not in seen:
+                seen.add(fid)
+                raw_places.append(place)
 
     results = []
-    for place in resp.json().get("results", []):
+    for place in raw_places:
         lat = place.get("latitude")
         lng = place.get("longitude")
         if lat is None or lng is None:
