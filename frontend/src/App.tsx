@@ -1,5 +1,5 @@
 import { useState, useRef } from 'react';
-import Map, { Marker, Source, Layer } from 'react-map-gl/mapbox';
+import Map, { Marker, Popup, Source, Layer } from 'react-map-gl/mapbox';
 import type { LayerProps } from 'react-map-gl/mapbox';
 import type { MapRef } from 'react-map-gl/mapbox';
 import 'mapbox-gl/dist/mapbox-gl.css';
@@ -16,6 +16,16 @@ async function geocodeAddress(address: string, label: string): Promise<GeocodedP
     throw new Error(err.detail || `Could not geocode ${label}`);
   }
   return res.json();
+}
+
+function formatDist(meters: number, metric: boolean): string {
+  if (metric) {
+    return meters >= 1000
+      ? `${(meters / 1000).toFixed(1)} km`
+      : `${Math.round(meters)} m`;
+  }
+  const miles = meters / 1609.34;
+  return miles >= 0.1 ? `${miles.toFixed(1)} mi` : `${Math.round(meters * 3.281)} ft`;
 }
 
 const routeCasing: LayerProps = {
@@ -39,6 +49,7 @@ function App() {
     routeGeoJson, steps,
     detourTolerance, setDetourTolerance,
     detours, setDetours,
+    useMetric, setUseMetric,
     loading, setLoading,
     setRouteCoords, setRouteResult,
     clearRoute,
@@ -46,6 +57,7 @@ function App() {
   const [status, setStatus] = useState('');
   const [directionsOpen, setDirectionsOpen] = useState(false);
   const [detoursLoading, setDetoursLoading] = useState(false);
+  const [selectedDetour, setSelectedDetour] = useState<DetourSuggestion | null>(null);
   const mapRef = useRef<MapRef>(null);
 
   const handleSubmit = async () => {
@@ -57,6 +69,7 @@ function App() {
     setLoading(true);
     setStatus('');
     setDetours([]);
+    setSelectedDetour(null);
     let bbox: number[] | null = null;
     try {
       const filledStops = stops.filter((s) => s.trim());
@@ -111,7 +124,7 @@ function App() {
         const res = await fetch(`${API_BASE}/detours`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ bbox, tolerance_minutes: detourTolerance }),
+          body: JSON.stringify({ bbox, tolerance_meters: Math.round(detourTolerance * (useMetric ? 1000 : 1609.34)) }),
         });
         if (res.ok) setDetours(await res.json());
       } catch {
@@ -156,14 +169,54 @@ function App() {
             <div className="w-4 h-4 rounded-full bg-cardinal shadow-[0_0_10px_rgba(197,5,12,0.6)] border-2 border-white" />
           </Marker>
         )}
+        {detours.map((d: DetourSuggestion) => (
+          <Marker
+            key={d.fsq_id}
+            longitude={d.lng}
+            latitude={d.lat}
+            anchor="bottom"
+            onClick={(e) => { e.originalEvent.stopPropagation(); setSelectedDetour(d); }}
+          >
+            <div className="w-3 h-3 rounded-full bg-white/80 border-2 border-cardinal shadow-[0_0_6px_rgba(197,5,12,0.4)] cursor-pointer hover:scale-125 transition-transform" />
+          </Marker>
+        ))}
+        {selectedDetour && (
+          <Popup
+            longitude={selectedDetour.lng}
+            latitude={selectedDetour.lat}
+            anchor="bottom"
+            offset={14}
+            closeButton={false}
+            onClose={() => setSelectedDetour(null)}
+            className="detour-popup"
+          >
+            <div
+              className="bg-panel backdrop-blur-xl border border-panel-border rounded-xl px-3 py-2.5 shadow-2xl min-w-[180px] cursor-pointer"
+              onClick={() => setSelectedDetour(null)}
+            >
+              <p className="text-sm text-white/90 font-medium leading-tight">{selectedDetour.name}</p>
+              {selectedDetour.location && <p className="text-[11px] text-white/50 mt-0.5">{selectedDetour.location}</p>}
+              <p className="text-[11px] text-white/30 mt-0.5">{selectedDetour.category}</p>
+              <span className="inline-block mt-1.5 text-[10px] font-semibold text-cardinal bg-cardinal/10 rounded-full px-2 py-0.5">
+                {formatDist(selectedDetour.distance_m, useMetric)} away
+              </span>
+            </div>
+          </Popup>
+        )}
       </Map>
 
       <div className="absolute bottom-0 left-0 w-full h-[44vh] rounded-t-2xl md:bottom-auto md:left-5 md:top-1/2 md:-translate-y-1/2 md:w-[22vw] md:min-w-72 md:h-[70vh] md:rounded-2xl bg-panel backdrop-blur-xl border border-panel-border shadow-2xl flex flex-col overflow-hidden">
 
         <div className="px-5 pt-5 pb-3 border-b border-panel-border">
-          <h2 className="font-display text-2xl text-white tracking-wide">
-            MadTrips
-          </h2>
+          <div className="flex items-center justify-between">
+            <h2 className="font-display text-2xl text-white tracking-wide">MadTrips</h2>
+            <button
+              onClick={() => setUseMetric(!useMetric)}
+              className="text-[11px] text-white/40 hover:text-white/70 transition-colors font-medium tracking-wide"
+            >
+              {useMetric ? 'km' : 'mi'}
+            </button>
+          </div>
           <p className="text-xs text-white/40 mt-1 font-body">
             Enter your origin and destination
           </p>
@@ -254,13 +307,15 @@ function App() {
           <div className="mt-5 pt-4 border-t border-panel-border">
             <div className="flex justify-between items-center mb-2">
               <span className="text-xs text-white/40">Detour tolerance</span>
-              <span className="text-xs text-cardinal font-medium">{detourTolerance} min</span>
+              <span className="text-xs text-cardinal font-medium">
+                {detourTolerance} {useMetric ? 'km' : 'mi'}
+              </span>
             </div>
             <input
               type="range"
-              min="10"
-              max="120"
-              step="10"
+              min={useMetric ? 10 : 5}
+              max={useMetric ? 160 : 100}
+              step={useMetric ? 10 : 5}
               value={detourTolerance}
               onChange={(e) => setDetourTolerance(Number(e.target.value))}
               className="w-full"
@@ -282,7 +337,7 @@ function App() {
                       <p className="text-[11px] text-white/30 mt-0.5">{d.category}</p>
                     </div>
                     <span className="text-[10px] font-semibold text-cardinal bg-cardinal/10 rounded-full px-2 py-1 shrink-0 whitespace-nowrap">
-                      ~{d.detour_minutes} min
+                      {formatDist(d.distance_m, useMetric)}
                     </span>
                   </div>
                 ))}
@@ -358,15 +413,7 @@ function App() {
                       <p className="text-sm text-white/80 leading-snug">{step.instruction}</p>
                       <div className="flex gap-2 mt-1">
                         <span className="text-[10px] text-white/25 tracking-wide uppercase">
-                          {step.distance >= 1000
-                            ? `${(step.distance / 1000).toFixed(1)} km`
-                            : `${Math.round(step.distance)} m`}
-                        </span>
-                        <span className="text-[10px] text-white/15">|</span>
-                        <span className="text-[10px] text-white/25 tracking-wide uppercase">
-                          {step.duration >= 60
-                            ? `${Math.round(step.duration / 60)} min`
-                            : `${Math.round(step.duration)} sec`}
+                          {formatDist(step.distance, useMetric)}
                         </span>
                       </div>
                     </div>

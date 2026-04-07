@@ -88,7 +88,7 @@ async def directions(req: DirectionsRequest):
 
 class DetoursRequest(BaseModel):
     bbox: list[float]  # [min_lng, min_lat, max_lng, max_lat]
-    tolerance_minutes: int
+    tolerance_meters: int
 
 
 @app.post("/detours")
@@ -101,7 +101,7 @@ async def get_detours(req: DetoursRequest):
     center_lng = (min_lng + max_lng) / 2
 
     bbox_radius = _haversine_m(center_lat, center_lng, max_lat, max_lng)
-    search_radius = int(min(bbox_radius + req.tolerance_minutes * _SPEED_M_PER_MIN, 100_000))
+    search_radius = int(min(bbox_radius + req.tolerance_meters, 100_000))
 
     async with httpx.AsyncClient() as client:
         resp = await client.get(
@@ -109,6 +109,7 @@ async def get_detours(req: DetoursRequest):
             params={
                 "ll": f"{center_lat},{center_lng}",
                 "radius": search_radius,
+                "categories": "13000,16000,10000,12000",
                 "limit": 15,
                 "sort": "RELEVANCE",
             },

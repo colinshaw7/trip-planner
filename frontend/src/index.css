@@ -19,6 +19,17 @@ html, body, #root {
   --font-body: "DM Sans", sans-serif;
 }
 
+.detour-popup .mapboxgl-popup-content {
+  background: transparent;
+  padding: 0;
+  box-shadow: none;
+  border-radius: 0;
+}
+
+.detour-popup .mapboxgl-popup-tip {
+  display: none;
+}
+
 input[type="range"] {
   -webkit-appearance: none;
   appearance: none;
