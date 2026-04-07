@@ -19,3 +19,31 @@ html, body, #root {
   --font-body: "DM Sans", sans-serif;
 }
 
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 3px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 2px;
+  outline: none;
+  cursor: pointer;
+}
+
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #c5050c;
+  box-shadow: 0 0 6px rgba(197, 5, 12, 0.5);
+}
+
+input[type="range"]::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #c5050c;
+  border: none;
+  box-shadow: 0 0 6px rgba(197, 5, 12, 0.5);
+}
+

@@ -4,7 +4,7 @@ import type { LayerProps } from 'react-map-gl/mapbox';
 import type { MapRef } from 'react-map-gl/mapbox';
 import 'mapbox-gl/dist/mapbox-gl.css';
 import { useTripStore } from './store';
-import type { GeocodedPoint } from './store';
+import type { GeocodedPoint, DetourSuggestion } from './store';
 
 const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN || '';
 const API_BASE = 'http://localhost:8000';
@@ -37,12 +37,15 @@ function App() {
     stops, setStops,
     startCoord, endCoord, stopCoords,
     routeGeoJson, steps,
+    detourTolerance, setDetourTolerance,
+    detours, setDetours,
     loading, setLoading,
     setRouteCoords, setRouteResult,
     clearRoute,
   } = useTripStore();
   const [status, setStatus] = useState('');
   const [directionsOpen, setDirectionsOpen] = useState(false);
+  const [detoursLoading, setDetoursLoading] = useState(false);
   const mapRef = useRef<MapRef>(null);
 
   const handleSubmit = async () => {
@@ -53,6 +56,8 @@ function App() {
     }
     setLoading(true);
     setStatus('');
+    setDetours([]);
+    let bbox: number[] | null = null;
     try {
       const filledStops = stops.filter((s) => s.trim());
       const [startData, endData, ...stopResults] = await Promise.all([
@@ -84,7 +89,7 @@ function App() {
       const segments = routeData.features?.[0]?.properties?.segments;
       setRouteResult(routeData, segments?.[0]?.steps ?? []);
 
-      const bbox = routeData.bbox;
+      bbox = routeData.bbox ?? null;
       if (bbox) {
         mapRef.current?.fitBounds(
           [[bbox[0], bbox[1]], [bbox[2], bbox[3]]],
@@ -98,6 +103,22 @@ function App() {
       clearRoute();
     } finally {
       setLoading(false);
+    }
+
+    if (bbox) {
+      setDetoursLoading(true);
+      try {
+        const res = await fetch(`${API_BASE}/detours`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ bbox, tolerance_minutes: detourTolerance }),
+        });
+        if (res.ok) setDetours(await res.json());
+      } catch {
+        // detours are non-critical
+      } finally {
+        setDetoursLoading(false);
+      }
     }
   };
 
@@ -163,7 +184,6 @@ function App() {
               />
             </div>
 
-            {/* Stops */}
             {stops.map((stop, i) => (
               <div key={`stop-${i}`}>
                 <div className="flex items-center gap-3">
@@ -230,6 +250,45 @@ function App() {
               />
             </div>
           </div>
+
+          <div className="mt-5 pt-4 border-t border-panel-border">
+            <div className="flex justify-between items-center mb-2">
+              <span className="text-xs text-white/40">Detour tolerance</span>
+              <span className="text-xs text-cardinal font-medium">{detourTolerance} min</span>
+            </div>
+            <input
+              type="range"
+              min="10"
+              max="120"
+              step="10"
+              value={detourTolerance}
+              onChange={(e) => setDetourTolerance(Number(e.target.value))}
+              className="w-full"
+            />
+          </div>
+
+          {detoursLoading && (
+            <p className="text-[11px] text-white/25 text-center mt-4">Finding nearby stops...</p>
+          )}
+          {detours.length > 0 && (
+            <div className="mt-4">
+              <p className="text-[10px] text-white/30 tracking-widest uppercase mb-2">Nearby Detours</p>
+              <div className="flex flex-col gap-2">
+                {detours.map((d: DetourSuggestion) => (
+                  <div key={d.fsq_id} className="flex items-center gap-3 bg-input-bg border border-input-border rounded-lg px-3 py-2.5">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm text-white/80 truncate leading-tight">{d.name}</p>
+                      {d.location && <p className="text-[11px] text-white/50 mt-0.5 truncate">{d.location}</p>}
+                      <p className="text-[11px] text-white/30 mt-0.5">{d.category}</p>
+                    </div>
+                    <span className="text-[10px] font-semibold text-cardinal bg-cardinal/10 rounded-full px-2 py-1 shrink-0 whitespace-nowrap">
+                      ~{d.detour_minutes} min
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
 
         <div className="px-5 pb-5 pt-2">
@@ -252,7 +311,6 @@ function App() {
       <div className={`absolute top-1/2 -translate-y-1/2 flex items-center transition-all duration-300 ${
         directionsOpen ? 'right-0' : 'right-[calc(-22vw-1px)]'
       }`}>
-        {/* Tab */}
         <button
           onClick={() => setDirectionsOpen(!directionsOpen)}
           className="bg-panel backdrop-blur-xl border border-panel-border border-r-0 rounded-l-lg px-1.5 py-3 text-white/60 hover:text-white transition-colors shrink-0"
@@ -262,7 +320,6 @@ function App() {
           </svg>
         </button>
 
-        {/* Panel */}
         <div className="w-[22vw] min-w-72 h-[70vh] rounded-l-2xl bg-panel backdrop-blur-xl border border-panel-border border-r-0 shadow-2xl flex flex-col overflow-hidden">
           <div className="px-5 pt-5 pb-3 border-b border-panel-border">
             <h2 className="font-display text-2xl text-white tracking-wide">

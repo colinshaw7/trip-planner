@@ -1,3 +1,4 @@
+import math
 import os
 
 import httpx
@@ -9,6 +10,10 @@ from pydantic import BaseModel
 load_dotenv()
 
 ORS_API_KEY = os.getenv("ORS_API_KEY")
+FOURSQUARE_API_KEY = os.getenv("FOURSQUARE_API_KEY")
+
+# ~80 km/h average speed, used for detour time estimates
+_SPEED_M_PER_MIN = 1333
 
 app = FastAPI()
 
@@ -18,6 +23,15 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+def _haversine_m(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
+    R = 6_371_000
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlambda = math.radians(lng2 - lng1)
+    a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2) ** 2
+    return 2 * R * math.asin(math.sqrt(a))
 
 
 @app.get("/health")
@@ -70,3 +84,64 @@ async def directions(req: DirectionsRequest):
         raise HTTPException(status_code=resp.status_code, detail=resp.text)
 
     return resp.json()
+
+
+class DetoursRequest(BaseModel):
+    bbox: list[float]  # [min_lng, min_lat, max_lng, max_lat]
+    tolerance_minutes: int
+
+
+@app.post("/detours")
+async def get_detours(req: DetoursRequest):
+    if not FOURSQUARE_API_KEY:
+        raise HTTPException(status_code=500, detail="Foursquare API key not configured")
+
+    min_lng, min_lat, max_lng, max_lat = req.bbox
+    center_lat = (min_lat + max_lat) / 2
+    center_lng = (min_lng + max_lng) / 2
+
+    bbox_radius = _haversine_m(center_lat, center_lng, max_lat, max_lng)
+    search_radius = int(min(bbox_radius + req.tolerance_minutes * _SPEED_M_PER_MIN, 100_000))
+
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(
+            "https://places-api.foursquare.com/places/search",
+            params={
+                "ll": f"{center_lat},{center_lng}",
+                "radius": search_radius,
+                "limit": 15,
+                "sort": "RELEVANCE",
+            },
+            headers={
+                "Authorization": f"Bearer {FOURSQUARE_API_KEY}",
+                "X-Places-Api-Version": "2025-02-05",
+            },
+        )
+
+    if resp.status_code != 200:
+        raise HTTPException(status_code=resp.status_code, detail=resp.text)
+
+    results = []
+    for place in resp.json().get("results", []):
+        lat = place.get("latitude")
+        lng = place.get("longitude")
+        if lat is None or lng is None:
+            continue
+        distance_m = place.get("distance", 0)
+        categories = place.get("categories", [])
+        location = place.get("location", {})
+        locality = location.get("locality", "")
+        region = location.get("region", "")
+        loc_str = f"{locality}, {region}" if locality and region else locality or region or ""
+        results.append({
+            "fsq_id": place["fsq_place_id"],
+            "name": place["name"],
+            "category": categories[0]["name"] if categories else "Place",
+            "location": loc_str,
+            "distance_m": distance_m,
+            "detour_minutes": round((distance_m / _SPEED_M_PER_MIN) * 2),
+            "lat": lat,
+            "lng": lng,
+        })
+
+    return results

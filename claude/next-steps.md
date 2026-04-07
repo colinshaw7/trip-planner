@@ -2,31 +2,10 @@
 
 Ordered by priority. Steps 1-3 complete the core trip planning flow.
 
-## 1. Zustand Store
-Move all trip state out of `App.tsx` into a Zustand store. Currently everything is in a single component — as we add detour state this will get unwieldy.
-
-**What moves:** `start`, `end`, `stops`, `startCoord`, `endCoord`, `stopCoords`, `routeGeoJson`, `steps`, `loading`
-
-## 2. Detour Tolerance UI
-Add a slider to the left panel for "detour tolerance" (e.g. 10–120 minutes off-route).
-- Stored in state, passed to the backend when fetching detour suggestions
-- Use as the search radius for Foursquare POI queries
-
-## 3. Detour Suggestions (Foursquare)
-Core differentiating feature. Backend queries Foursquare Places for POIs within a corridor around the route.
-
-**Backend:**
-- New `POST /detours` endpoint
-- Build a geographic bounding box from the route bbox + tolerance
-- Call Foursquare Places API `/v3/places/search` with `ll`, `radius`, and `categories`
-- Score/rank results by proximity to route
-- Return list of `{ name, category, distance_m, detour_minutes, lat, lng, fsq_id }`
-
-**Frontend:**
-- Detour cards rendered in the left panel below the form
-- Each card shows name, category, estimated detour time
-- Foursquare API key already in `backend/.env`
-
+## ~~1. Zustand Store~~ ✓
+## ~~2. Detour Tolerance UI~~ ✓
+## ~~3. Detour Suggestions (Foursquare)~~ ✓
+3.5: Pins for suggested location
 ## 4. Toggle Detours
 User clicks a detour card → it's added as a stop → route re-fetches.
 - "Active" detour cards visually highlighted
