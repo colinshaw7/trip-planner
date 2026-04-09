@@ -1,8 +1,11 @@
 import asyncio
+import hashlib
+import json
 import math
 import os
 
 import httpx
+import redis.asyncio as redis
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -12,8 +15,34 @@ load_dotenv()
 
 ORS_API_KEY = os.getenv("ORS_API_KEY")
 FOURSQUARE_API_KEY = os.getenv("FOURSQUARE_API_KEY")
+REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379")
 
 app = FastAPI()
+
+cache = redis.from_url(REDIS_URL, decode_responses=True)
+
+GEOCODE_TTL = 3600
+DIRECTIONS_TTL = 86400
+DETOURS_TTL = 3600
+
+
+def _cache_key(prefix: str, raw: str) -> str:
+    digest = hashlib.sha256(raw.encode()).hexdigest()[:16]
+    return f"{prefix}:{digest}"
+
+
+async def _cache_get(key: str) -> str | None:
+    try:
+        return await cache.get(key)
+    except Exception:
+        return None
+
+
+async def _cache_set(key: str, value: str, ttl: int) -> None:
+    try:
+        await cache.set(key, value, ex=ttl)
+    except Exception:
+        pass
 
 app.add_middleware(
     CORSMiddleware,
@@ -34,13 +63,24 @@ def _haversine_m(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
 
 @app.get("/health")
 async def health():
-    return {"status": "ok"}
+    try:
+        await cache.ping()
+        cache_status = "connected"
+    except Exception:
+        cache_status = "unavailable"
+    return {"status": "ok", "cache": cache_status}
 
 
 @app.get("/geocode")
 async def geocode(address: str = Query(..., min_length=1)):
     if not ORS_API_KEY:
         raise HTTPException(status_code=500, detail="ORS API key not configured")
+
+    key = _cache_key("geo", address.strip().lower())
+
+    cached = await _cache_get(key)
+    if cached:
+        return json.loads(cached)
 
     async with httpx.AsyncClient() as client:
         resp = await client.get(
@@ -56,7 +96,11 @@ async def geocode(address: str = Query(..., min_length=1)):
 
     coords = features[0]["geometry"]["coordinates"]  # [lng, lat]
     label = features[0]["properties"]["label"]
-    return {"lng": coords[0], "lat": coords[1], "label": label}
+    result = {"lng": coords[0], "lat": coords[1], "label": label}
+
+    await _cache_set(key, json.dumps(result), GEOCODE_TTL)
+
+    return result
 
 
 class DirectionsRequest(BaseModel):
@@ -67,6 +111,13 @@ class DirectionsRequest(BaseModel):
 async def directions(req: DirectionsRequest):
     if not ORS_API_KEY:
         raise HTTPException(status_code=500, detail="ORS API key not configured")
+
+    rounded = [[round(c, 5) for c in pair] for pair in req.coordinates]
+    key = _cache_key("dir", json.dumps(rounded, separators=(",", ":")))
+
+    cached = await _cache_get(key)
+    if cached:
+        return json.loads(cached)
 
     async with httpx.AsyncClient() as client:
         resp = await client.post(
@@ -81,7 +132,9 @@ async def directions(req: DirectionsRequest):
     if resp.status_code != 200:
         raise HTTPException(status_code=resp.status_code, detail=resp.text)
 
-    return resp.json()
+    result = resp.json()
+    await _cache_set(key, json.dumps(result), DIRECTIONS_TTL)
+    return result
 
 
 class DetoursRequest(BaseModel):
@@ -121,6 +174,13 @@ async def get_detours(req: DetoursRequest):
 
     search_radius = min(req.tolerance_meters, 100_000)
 
+    rounded_samples = [[round(c, 4) for c in s] for s in samples]
+    key = _cache_key("det", json.dumps({"s": rounded_samples, "r": search_radius}, separators=(",", ":")))
+
+    cached = await _cache_get(key)
+    if cached:
+        return json.loads(cached)
+
     async with httpx.AsyncClient() as client:
         responses = await asyncio.gather(*[
             _fsq_search(client, lng_lat[1], lng_lat[0], search_radius)
@@ -158,4 +218,5 @@ async def get_detours(req: DetoursRequest):
             "lng": lng,
         })
 
+    await _cache_set(key, json.dumps(results), DETOURS_TTL)
     return results
