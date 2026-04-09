@@ -8,7 +8,6 @@ export type DetourSuggestion = {
   category: string;
   location: string;
   distance_m: number;
-  detour_minutes: number;
   lat: number;
   lng: number;
 };
@@ -28,6 +27,7 @@ interface TripState {
   // Detours
   detourTolerance: number;
   detours: DetourSuggestion[];
+  activeDetourIds: string[];
   // Request state
   loading: boolean;
   // Display
@@ -42,6 +42,7 @@ interface TripState {
   setDetourTolerance: (v: number) => void;
   setUseMetric: (v: boolean) => void;
   setDetours: (detours: DetourSuggestion[]) => void;
+  setActiveDetourIds: (ids: string[]) => void;
   setLoading: (v: boolean) => void;
   clearRoute: () => void;
 }
@@ -57,6 +58,7 @@ export const useTripStore = create<TripState>((set) => ({
   steps: [],
   detourTolerance: 25,
   detours: [],
+  activeDetourIds: [],
   loading: false,
   useMetric: false,
 
@@ -68,6 +70,7 @@ export const useTripStore = create<TripState>((set) => ({
   setDetourTolerance: (v) => set({ detourTolerance: v }),
   setUseMetric: (v) => set({ useMetric: v }),
   setDetours: (detours) => set({ detours }),
+  setActiveDetourIds: (ids) => set({ activeDetourIds: ids }),
   setLoading: (v) => set({ loading: v }),
-  clearRoute: () => set({ startCoord: null, endCoord: null, stopCoords: [], routeGeoJson: null, steps: [], detours: [] }),
+  clearRoute: () => set({ startCoord: null, endCoord: null, stopCoords: [], routeGeoJson: null, steps: [], detours: [], activeDetourIds: [] }),
 }));

@@ -13,9 +13,6 @@ load_dotenv()
 ORS_API_KEY = os.getenv("ORS_API_KEY")
 FOURSQUARE_API_KEY = os.getenv("FOURSQUARE_API_KEY")
 
-# ~80 km/h average speed, used for detour time estimates
-_SPEED_M_PER_MIN = 1333
-
 app = FastAPI()
 
 app.add_middleware(
@@ -157,7 +154,6 @@ async def get_detours(req: DetoursRequest):
             "category": categories[0]["name"] if categories else "Place",
             "location": loc_str,
             "distance_m": distance_m,
-            "detour_minutes": round((distance_m / _SPEED_M_PER_MIN) * 2),
             "lat": lat,
             "lng": lng,
         })

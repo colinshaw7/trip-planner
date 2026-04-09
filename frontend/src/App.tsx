@@ -71,6 +71,7 @@ function App() {
     routeGeoJson, steps,
     detourTolerance, setDetourTolerance,
     detours, setDetours,
+    activeDetourIds, setActiveDetourIds,
     useMetric, setUseMetric,
     loading, setLoading,
     setRouteCoords, setRouteResult,
@@ -78,7 +79,6 @@ function App() {
   } = useTripStore();
   const [status, setStatus] = useState('');
   const [directionsOpen, setDirectionsOpen] = useState(false);
-  const [detoursLoading, setDetoursLoading] = useState(false);
   const [selectedDetour, setSelectedDetour] = useState<DetourSuggestion | null>(null);
   const mapRef = useRef<MapRef>(null);
 
@@ -91,6 +91,7 @@ function App() {
     setLoading(true);
     setStatus('');
     setDetours([]);
+    setActiveDetourIds([]);
     setSelectedDetour(null);
     let routeLineCoords: number[][] | null = null;
     try {
@@ -142,7 +143,6 @@ function App() {
     }
 
     if (routeLineCoords) {
-      setDetoursLoading(true);
       const toleranceM = Math.round(detourTolerance * (useMetric ? 1000 : 1609.34));
       try {
         const res = await fetch(`${API_BASE}/detours`, {
@@ -150,10 +150,7 @@ function App() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ route_coords: routeLineCoords, tolerance_meters: toleranceM }),
         });
-        if (!res.ok) {
-          setDetoursLoading(false);
-          return;
-        }
+        if (!res.ok) return;
 
         const raw: DetourSuggestion[] = await res.json();
 
@@ -178,10 +175,69 @@ function App() {
         setDetours(Object.values(buckets).sort((a, b) => a.segIdx - b.segIdx).map(({ segIdx: _seg, ...d }) => d));
       } catch {
         // detours are non-critical
-      } finally {
-        setDetoursLoading(false);
       }
     }
+  };
+
+  const rerouteWithDetours = async (newActiveIds: string[]) => {
+    if (!startCoord || !endCoord || loading) return;
+    setLoading(true);
+    setStatus('');
+    try {
+      const routeLineCoords = (routeGeoJson?.features?.[0]?.geometry as GeoJSON.LineString | undefined)?.coordinates ?? [];
+      const activeDetours = detours.filter((d) => newActiveIds.includes(d.fsq_id));
+
+      type Waypoint = { lng: number; lat: number; segIdx: number };
+      const waypoints: Waypoint[] = [];
+      for (const stop of stopCoords) {
+        const { segIdx } = nearestOnRoute(stop.lat, stop.lng, routeLineCoords);
+        waypoints.push({ lng: stop.lng, lat: stop.lat, segIdx });
+      }
+      for (const d of activeDetours) {
+        const { segIdx } = nearestOnRoute(d.lat, d.lng, routeLineCoords);
+        waypoints.push({ lng: d.lng, lat: d.lat, segIdx });
+      }
+      waypoints.sort((a, b) => a.segIdx - b.segIdx);
+
+      const allCoords = [
+        [startCoord.lng, startCoord.lat],
+        ...waypoints.map((w) => [w.lng, w.lat]),
+        [endCoord.lng, endCoord.lat],
+      ];
+
+      const dirRes = await fetch(`${API_BASE}/directions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ coordinates: allCoords }),
+      });
+      if (!dirRes.ok) {
+        const err = await dirRes.json();
+        throw new Error(err.detail || 'Could not re-route');
+      }
+      const routeData = await dirRes.json();
+      const segments = routeData.features?.[0]?.properties?.segments;
+      setRouteResult(routeData, segments?.[0]?.steps ?? []);
+      const bbox = routeData.bbox;
+      if (bbox) {
+        mapRef.current?.fitBounds(
+          [[bbox[0], bbox[1]], [bbox[2], bbox[3]]],
+          { padding: 80, duration: 1000 }
+        );
+      }
+    } catch (e) {
+      setStatus(e instanceof Error ? e.message : 'Re-route failed');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleToggleDetour = async (d: DetourSuggestion) => {
+    const isActive = activeDetourIds.includes(d.fsq_id);
+    const newActiveIds = isActive
+      ? activeDetourIds.filter((id) => id !== d.fsq_id)
+      : [...activeDetourIds, d.fsq_id];
+    setActiveDetourIds(newActiveIds);
+    await rerouteWithDetours(newActiveIds);
   };
 
   return (
@@ -218,40 +274,70 @@ function App() {
             <div className="w-4 h-4 rounded-full bg-cardinal shadow-[0_0_10px_rgba(197,5,12,0.6)] border-2 border-white" />
           </Marker>
         )}
-        {detours.map((d: DetourSuggestion) => (
-          <Marker
-            key={d.fsq_id}
-            longitude={d.lng}
-            latitude={d.lat}
-            anchor="bottom"
-            onClick={(e) => { e.originalEvent.stopPropagation(); setSelectedDetour(d); }}
-          >
-            <div className="w-3 h-3 rounded-full bg-white/80 border-2 border-cardinal shadow-[0_0_6px_rgba(197,5,12,0.4)] cursor-pointer hover:scale-125 transition-transform" />
-          </Marker>
-        ))}
-        {selectedDetour && (
-          <Popup
-            longitude={selectedDetour.lng}
-            latitude={selectedDetour.lat}
-            anchor="bottom"
-            offset={14}
-            closeButton={false}
-            onClose={() => setSelectedDetour(null)}
-            className="detour-popup"
-          >
-            <div
-              className="bg-panel backdrop-blur-xl border border-panel-border rounded-xl px-3 py-2.5 shadow-2xl min-w-[180px] cursor-pointer"
-              onClick={() => setSelectedDetour(null)}
+        {detours.map((d: DetourSuggestion) => {
+          const isActive = activeDetourIds.includes(d.fsq_id);
+          return (
+            <Marker
+              key={d.fsq_id}
+              longitude={d.lng}
+              latitude={d.lat}
+              anchor="bottom"
+              onClick={(e) => { e.originalEvent.stopPropagation(); setSelectedDetour(d); }}
             >
-              <p className="text-sm text-white/90 font-medium leading-tight">{selectedDetour.name}</p>
-              {selectedDetour.location && <p className="text-[11px] text-white/50 mt-0.5">{selectedDetour.location}</p>}
-              <p className="text-[11px] text-white/30 mt-0.5">{selectedDetour.category}</p>
-              <span className="inline-block mt-1.5 text-[10px] font-semibold text-cardinal bg-cardinal/10 rounded-full px-2 py-0.5">
-                {formatDist(selectedDetour.distance_m, useMetric)} away
-              </span>
-            </div>
-          </Popup>
-        )}
+              <div className={`w-3 h-3 rounded-full border-2 cursor-pointer hover:scale-125 transition-transform ${
+                isActive
+                  ? 'bg-cardinal border-white shadow-[0_0_8px_rgba(197,5,12,0.7)]'
+                  : 'bg-white/80 border-cardinal shadow-[0_0_6px_rgba(197,5,12,0.4)]'
+              }`} />
+            </Marker>
+          );
+        })}
+        {selectedDetour && (() => {
+          const isActive = activeDetourIds.includes(selectedDetour.fsq_id);
+          return (
+            <Popup
+              longitude={selectedDetour.lng}
+              latitude={selectedDetour.lat}
+              anchor="bottom"
+              offset={14}
+              closeButton={false}
+              onClose={() => setSelectedDetour(null)}
+              className="detour-popup"
+            >
+              <div className="bg-panel backdrop-blur-xl border border-panel-border rounded-xl px-3 py-2.5 shadow-2xl min-w-[180px]">
+                <div className="flex items-start gap-2">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm text-white/90 font-medium leading-tight">{selectedDetour.name}</p>
+                    {selectedDetour.location && <p className="text-[11px] text-white/50 mt-0.5">{selectedDetour.location}</p>}
+                    <p className="text-[11px] text-white/30 mt-0.5">{selectedDetour.category}</p>
+                  </div>
+                  <button
+                    onClick={() => handleToggleDetour(selectedDetour)}
+                    disabled={loading}
+                    className={`w-6 h-6 rounded-full flex items-center justify-center shrink-0 mt-0.5 transition-all duration-150 disabled:opacity-50 disabled:cursor-not-allowed ${
+                      isActive
+                        ? 'bg-cardinal text-white hover:bg-cardinal-dark'
+                        : 'bg-white/10 text-white/50 hover:bg-white/20 hover:text-white/80'
+                    }`}
+                  >
+                    {isActive ? (
+                      <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                      </svg>
+                    ) : (
+                      <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+                      </svg>
+                    )}
+                  </button>
+                </div>
+                <span className="inline-block mt-1.5 text-[10px] font-semibold text-cardinal bg-cardinal/10 rounded-full px-2 py-0.5">
+                  {formatDist(selectedDetour.distance_m, useMetric)} away
+                </span>
+              </div>
+            </Popup>
+          );
+        })()}
       </Map>
 
       <div className="absolute bottom-0 left-0 w-full h-[44vh] rounded-t-2xl md:bottom-auto md:left-5 md:top-1/2 md:-translate-y-1/2 md:w-[22vw] md:min-w-72 md:h-[70vh] md:rounded-2xl bg-panel backdrop-blur-xl border border-panel-border shadow-2xl flex flex-col overflow-hidden">
@@ -339,6 +425,36 @@ function App() {
               </button>
             </div>
 
+            {detours.filter((d) => activeDetourIds.includes(d.fsq_id)).map((d) => (
+              <div key={`detour-stop-${d.fsq_id}`}>
+                <div className="flex items-center gap-3">
+                  <div className="flex flex-col items-center w-4 shrink-0 py-0.5">
+                    <div className="w-px h-2 bg-white/15" />
+                    <div className="w-1 h-1 rounded-full bg-cardinal/40" />
+                    <div className="w-px h-2 bg-white/15" />
+                  </div>
+                </div>
+                <div className="flex items-center gap-3">
+                  <div className="flex flex-col items-center w-4 shrink-0">
+                    <div className="w-2 h-2 rounded-full bg-cardinal/60" />
+                  </div>
+                  <div className="flex-1 min-w-0 bg-cardinal/10 border border-cardinal/30 rounded-lg px-3 py-2">
+                    <p className="text-sm text-white/90 truncate leading-tight">{d.name}</p>
+                    <p className="text-[11px] text-white/40 mt-0.5">{d.category}</p>
+                  </div>
+                  <button
+                    onClick={() => handleToggleDetour(d)}
+                    disabled={loading}
+                    className="text-white/30 hover:text-red-400 transition-colors shrink-0 disabled:opacity-50"
+                  >
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
+                </div>
+              </div>
+            ))}
+
             <div className="flex items-center gap-3">
               <div className="flex flex-col items-center w-4 shrink-0">
                 <div className="w-2.5 h-2.5 rounded-full border-2 border-white/60 bg-transparent" />
@@ -371,28 +487,6 @@ function App() {
             />
           </div>
 
-          {detoursLoading && (
-            <p className="text-[11px] text-white/25 text-center mt-4">Finding nearby stops...</p>
-          )}
-          {detours.length > 0 && (
-            <div className="mt-4">
-              <p className="text-[10px] text-white/30 tracking-widest uppercase mb-2">Nearby Detours</p>
-              <div className="flex flex-col gap-2">
-                {detours.map((d: DetourSuggestion) => (
-                  <div key={d.fsq_id} className="flex items-center gap-3 bg-input-bg border border-input-border rounded-lg px-3 py-2.5">
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm text-white/80 truncate leading-tight">{d.name}</p>
-                      {d.location && <p className="text-[11px] text-white/50 mt-0.5 truncate">{d.location}</p>}
-                      <p className="text-[11px] text-white/30 mt-0.5">{d.category}</p>
-                    </div>
-                    <span className="text-[10px] font-semibold text-cardinal bg-cardinal/10 rounded-full px-2 py-1 shrink-0 whitespace-nowrap">
-                      {formatDist(d.distance_m, useMetric)}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
         </div>
 
         <div className="px-5 pb-5 pt-2">
